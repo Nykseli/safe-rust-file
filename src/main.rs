@@ -6,58 +6,92 @@ use nix::{
         write, O_CLOEXEC, O_DIRECTORY, O_NOFOLLOW, O_PATH, O_RDONLY, O_RDWR, S_IFMT, S_IFREG,
         S_IWOTH,
     },
-    sys::stat::{fstat, Mode},
+    sys::stat::{fstat, FileStat, Mode},
     unistd::close,
+    NixPath,
 };
 
-struct SafeFile {
+struct File {
     fd: RawFd,
 }
 
+impl File {
+    fn open<P>(path: &P, oflag: OFlag, mode: Mode) -> Result<Self, ()>
+    where
+        P: ?Sized + NixPath,
+    {
+        // TODO: errors
+        let fd = open(path, oflag, mode).unwrap();
+        Ok(Self { fd })
+    }
+
+    fn openat<P>(&self, path: &P, oflag: OFlag, mode: Mode) -> Result<Self, ()>
+    where
+        P: ?Sized + NixPath,
+    {
+        // TODO: errors
+        let fd = openat(Some(self.fd), path, oflag, mode).unwrap();
+        Ok(Self { fd })
+    }
+
+    pub fn fstat(&self) -> Result<FileStat, ()> {
+        // TODO: return error
+        Ok(fstat(self.fd).unwrap())
+    }
+}
+
+impl Drop for File {
+    fn drop(&mut self) {
+        let _ = close(self.fd);
+    }
+}
+
+struct SafeFile {
+    fd: File,
+}
+
 impl SafeFile {
-    fn walk_open_dir(dirs: &[&str]) -> RawFd {
+    fn walk_open_dir(dirs: &[&str]) -> File {
         let dir_flags = O_RDONLY | O_PATH | O_CLOEXEC | O_NOFOLLOW | O_DIRECTORY;
         let dir_flags = OFlag::from_bits(dir_flags).unwrap();
         let root_flags = O_PATH | O_DIRECTORY | O_CLOEXEC | O_RDONLY;
         let root_flags = OFlag::from_bits(root_flags).unwrap();
 
         // TODO: return error
-        let mut parent_fd = open("/", root_flags, Mode::empty()).unwrap();
+        let mut parent_fd = File::open("/", root_flags, Mode::empty()).unwrap();
 
         // ignore the last as it should be a text file, not directory
         for dir in &dirs[..dirs.len() - 1] {
             // TODO: return error
-            let next = openat(Some(parent_fd), *dir, dir_flags, Mode::empty()).unwrap();
+            let next = parent_fd.openat(*dir, dir_flags, Mode::empty()).unwrap();
 
             // TODO: return error
-            let stat = fstat(next).unwrap();
+            let stat = next.fstat().unwrap();
 
             // no world writeable files to pervent usafe paths like /tmp/ or /var/tmp/
             if stat.st_mode & S_IWOTH != 0 {
                 panic!("No world writable files allowed");
             }
 
-            close(parent_fd).unwrap();
             parent_fd = next;
         }
 
         parent_fd
     }
 
-    fn safe_reopen_file(file: RawFd, flags: OFlag) -> RawFd {
-        let fd_path = format!("/proc/self/fd/{file}");
+    fn safe_reopen_file(file: File, flags: OFlag) -> File {
+        let fd_path = format!("/proc/self/fd/{}", file.fd);
         // TODO: retun err
-        let fd = open(fd_path.as_str(), flags, Mode::empty()).unwrap();
-        close(file).unwrap();
+        let fd = File::open(fd_path.as_str(), flags, Mode::empty()).unwrap();
         fd
     }
 
-    fn safe_open_file(parent: RawFd, name: &str) -> RawFd {
+    fn safe_open_file(parent: File, name: &str) -> File {
         let oflags = OFlag::from_bits(O_RDONLY | O_PATH | O_CLOEXEC | O_NOFOLLOW).unwrap();
         // TODO: return error
-        let fd = openat(Some(parent), name, oflags, Mode::empty()).unwrap();
+        let fd = parent.openat(name, oflags, Mode::empty()).unwrap();
         // TODO: return err if stat files
-        let stat = fstat(fd).unwrap();
+        let stat = fd.fstat().unwrap();
 
         // no world writeable or special user files
         if stat.st_mode & S_IWOTH != 0 || stat.st_mode & S_IFMT != S_IFREG {
@@ -85,7 +119,6 @@ impl SafeFile {
         // TODO: parent_fd should be struct that can be auto dropped
         let parent_fd = Self::walk_open_dir(&dirs[1..]);
         let fd = Self::safe_open_file(parent_fd, dirs.iter().last().unwrap());
-        close(parent_fd).unwrap();
 
         Ok(Self { fd })
     }
@@ -93,14 +126,8 @@ impl SafeFile {
     fn write(&self, data: &str) {
         // TODO: Make sure the whole buffer is written and retun err if it's not
         unsafe {
-            write(self.fd, data.as_ptr() as *const c_void, data.len());
+            write(self.fd.fd, data.as_ptr() as *const c_void, data.len());
         }
-    }
-}
-
-impl Drop for SafeFile {
-    fn drop(&mut self) {
-        let _ = close(self.fd);
     }
 }
 
