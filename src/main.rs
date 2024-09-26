@@ -1,10 +1,10 @@
 use std::{env::args, ffi::c_void, os::fd::RawFd, path::Path};
 
 use nix::{
-    fcntl::{open, openat, OFlag},
+    fcntl::{fcntl, open, openat, FcntlArg::F_OFD_SETLK, OFlag},
     libc::{
-        write, O_CLOEXEC, O_DIRECTORY, O_NOFOLLOW, O_PATH, O_RDONLY, O_RDWR, S_IFMT, S_IFREG,
-        S_IWOTH,
+        flock, write, F_WRLCK, O_CLOEXEC, O_DIRECTORY, O_NOFOLLOW, O_PATH, O_RDONLY, O_RDWR,
+        SEEK_SET, S_IFMT, S_IFREG, S_IWOTH,
     },
     sys::stat::{fstat, FileStat, Mode},
     unistd::close,
@@ -37,6 +37,19 @@ impl File {
     pub fn fstat(&self) -> Result<FileStat, ()> {
         // TODO: return error
         Ok(fstat(self.fd).unwrap())
+    }
+
+    fn lock(&self) {
+        let fl = flock {
+            l_type: F_WRLCK as i16,
+            l_whence: SEEK_SET as i16,
+            l_start: 0,
+            l_len: 0,
+            l_pid: 0,
+        };
+
+        // TODO: return an error
+        fcntl(self.fd, F_OFD_SETLK(&fl)).unwrap();
     }
 }
 
@@ -116,9 +129,9 @@ impl SafeFile {
         }
 
         // first item will be empty string so ignore it
-        // TODO: parent_fd should be struct that can be auto dropped
         let parent_fd = Self::walk_open_dir(&dirs[1..]);
         let fd = Self::safe_open_file(parent_fd, dirs.iter().last().unwrap());
+        fd.lock();
 
         Ok(Self { fd })
     }
