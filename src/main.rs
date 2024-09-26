@@ -44,6 +44,14 @@ impl SafeFile {
         parent_fd
     }
 
+    fn safe_reopen_file(file: RawFd, flags: OFlag) -> RawFd {
+        let fd_path = format!("/proc/self/fd/{file}");
+        // TODO: retun err
+        let fd = open(fd_path.as_str(), flags, Mode::empty()).unwrap();
+        close(file).unwrap();
+        fd
+    }
+
     fn safe_open_file(parent: RawFd, name: &str) -> RawFd {
         let oflags = OFlag::from_bits(O_RDONLY | O_PATH | O_CLOEXEC | O_NOFOLLOW).unwrap();
         // TODO: return error
@@ -57,12 +65,8 @@ impl SafeFile {
             panic!("No world writable files or sepcial user files allowed");
         }
 
-        // TODO: proper safe reopen
-        close(fd).unwrap();
-
         let oflags = OFlag::from_bits(O_RDWR | O_CLOEXEC).unwrap();
-        // TODO: return error
-        openat(Some(parent), name, oflags, Mode::empty()).unwrap()
+        Self::safe_reopen_file(fd, oflags)
     }
 
     fn open(path: &str) -> Result<Self, ()> {
