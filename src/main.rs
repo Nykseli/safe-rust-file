@@ -1,4 +1,4 @@
-use std::{ffi::c_void, os::fd::RawFd};
+use std::{env::args, ffi::c_void, os::fd::RawFd, path::Path};
 
 use nix::{
     fcntl::{open, openat, OFlag},
@@ -132,7 +132,15 @@ impl SafeFile {
 }
 
 fn main() {
-    let file =
-        SafeFile::open("/home/duck/Documents/rust-playground/safe-file/tmp/test.txt").unwrap();
+    let args: Vec<String> = args().collect();
+
+    if args.len() < 2 {
+        println!("Give file path as an argument");
+        return;
+    }
+
+    let path_full = Path::new(&args[1]).canonicalize().unwrap();
+
+    let file = SafeFile::open(path_full.to_str().unwrap()).unwrap();
     file.write("Hello world!\n");
 }
